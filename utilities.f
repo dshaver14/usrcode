@@ -1613,6 +1613,7 @@ c-----------------------------------------------------------------------
       ifto=.true.
 
       call rzero(t,n*nelt)
+      call izero(out_mask,nelt)
 
       do iel=1,nelt
       do ifc=1,2*ldim
@@ -1622,6 +1623,7 @@ c-----------------------------------------------------------------------
         do 20 i=i0,i1
           t(i,j,k,iel,1)=BoundaryID(ifc,iel)
  20     continue
+        if(BoundaryID(ifc,iel).ne.0) out_mask(iel)=1
       enddo
       enddo
 
