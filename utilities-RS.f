@@ -1618,12 +1618,12 @@ c-----------------------------------------------------------------------
       ifto=.true.
 
       call rzero(t,n*nelt)
-      call izero(out_mask,nelt)
+c     call izero(out_mask,nelt)
 
       do iel=1,nelt
       do ifc=1,2*ldim
         if(BoundaryID(ifc,iel).ne.0) then
-          out_mask(iel) = 1
+c         out_mask(iel) = 1
           nBCIDs=nBCIDs+1
           call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
           do 20 k=k0,k1

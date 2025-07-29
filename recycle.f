@@ -18,13 +18,13 @@ c     iffield(3)=.true. ! recycle field 4 (scalar 2, ifield-1)
 c     return
 c     end
 c-----------------------------------------------------------------------
-c     subroutine userbc (ix,iy,iz,f,ieg)
+c     subroutine userbc (ix,iy,iz,f,eg)
 c     implicit none
 c     include 'SIZE'
 c     include 'TOTAL'
 c     include 'NEKUSE'
 
-c     integer ix,iy,iz,ie,f,ieg
+c     integer ix,iy,iz,ie,f,eg
 c     ie = gllel(eg)
 c     real ux_recycle,uy_recycle,uz_recycle,temp_recycle
 
@@ -45,6 +45,7 @@ c     real dx,dy,dz,ubar,tbar
 
 c******** Recycling using Findpts ****************************
 
+c     <dx,dy,dz> is the offset vector from the inlet to the recycling plane
 c     dx=5.
 c     dy=0.
 c     dz=0.
@@ -479,7 +480,7 @@ C-----------------------------------------------------------------------
       implicit none
       include 'SIZE'
 
-      integer ix,iy,iz,ie
+      integer ix,iy,iz,ie,ifield
       real uin,vin,win,tin
       common /cvelbc/ uin(lx1,ly1,lz1,lelv)
      $              , vin(lx1,ly1,lz1,lelv)

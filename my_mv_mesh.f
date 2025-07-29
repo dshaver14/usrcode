@@ -1,5 +1,5 @@
 c----------------------------------------------------------------------
-      subroutine my_mv_mesh(dxo,dyo,dzo, nstps)
+      subroutine my_mv_mesh(dxo,dyo,dzo,nstps)
 
 c     This subroutine solves for and applies the overall mesh 
 c     displacement when provided with the displacment vector on boundaries
@@ -19,8 +19,9 @@ c     with the 'mv ' BC in field 0.
       real mask,pmax,pmin
       real srfbl,volbl,delta,deltap1,deltap2,arg1,arg2
       real zero,one
-      integer e,f,nstps
+      integer e,f,nstps,ifield_sv,nbl
       integer icalld
+      logical ifxyos
       save    icalld
       data    icalld /0/
 
@@ -29,66 +30,76 @@ c     use local arrays to avoid relying on lx1m
       real dely(lx1,ly1,lz1,lelt)
       real delz(lx1,ly1,lz1,lelt)
 
+      real finx(lx1,ly1,lz1,lelt)
+      real finy(lx1,ly1,lz1,lelt)
+      real finz(lx1,ly1,lz1,lelt)
+      real relax
+
+      ifield_sv=ifield
+      ifield = 0
+      restol(ifield) = 1.0e-3 !solver tolerance
+
       n = nx1*ny1*nz1*nelv
       nface = 2*ndim
       zero = 0.
       one  = 1.
-      fact = 1.0/real(nstps)
 
-      call copy(umeshx,dxo,n)
-      call copy(umeshy,dyo,n)
-      call copy(umeshz,dzo,n)
+c     For non-linear relaxation
+      call copy(finx,xm1,n)
+      call copy(finy,ym1,n)
+      call copy(finz,zm1,n)
 
-      call cmult(umeshx,fact,n)
-      call cmult(umeshy,fact,n)
-      call cmult(umeshz,fact,n)
+      call add2(finx,dxo,n)
+      call add2(finy,dyo,n)
+      call add2(finz,dzo,n)
+
+c     For linear relaxation
+c     relax = 1.0/real(nstps)
+c     call copy(umeshx,dxo,n)
+c     call copy(umeshy,dyo,n)
+c     call copy(umeshz,dzo,n)
+
+c     call cmult(umeshx,relax,n)
+c     call cmult(umeshy,relax,n)
+c     call cmult(umeshz,relax,n)
 
       utx_usr=glamax(dxo,n)
       uty_usr=glamax(dyo,n)  
       utz_usr=glamax(dzo,n)
 
-      if (nid.eq.0) write(6,*) "utx_usr: ",utx_usr
-      if (nid.eq.0) write(6,*) "uty_usr: ",uty_usr
-      if (nid.eq.0) write(6,*) "utz_usr: ",utz_usr
-    
+      if (nid.eq.0) then
+        write(6,*) "utx_usr: ",utx_usr
+        write(6,*) "uty_usr: ",uty_usr
+        write(6,*) "utz_usr: ",utz_usr
+      endif
+
+      time = 0.0    
+      ifxyos = ifxyo
+      ifxyo = .true.
+      call prepost(.true.,'mvm')
+      ifxyo = ifxyos
+      nbl = 0
+c     call dumpmesh('mvm')
+
       do istep = 1,nstps
+c       factor for decaying boundary layer preservation
+        fact = real(istep-1)/real(nstps-1)
+        fact = 1.0-fact
+
+c       for non-linear relaxation
+        call sub3(umeshx,finx,xm1,n)
+        call sub3(umeshy,finy,ym1,n)
+        call sub3(umeshz,finz,zm1,n)
+
+        relax = 1.0 - (real(istep)/real(nstps)-1.0)**2
+c       relax = real(istep)/real(nstps)
+        if(nio.eq.0) write(*,*) "relaxation factor: ",relax
+        call cmult(umeshx,relax,n)
+        call cmult(umeshy,relax,n)
+        call cmult(umeshz,relax,n)
+
         if (icalld.eq.0) then
           icalld=1
-          napprx(1)=0
-          nappry(1)=0
-          napprz(1)=0
-          nxz   = nx1*nz1
-          nxyz  = nx1*ny1*nz1
-          srfbl = 0.   ! Surface area of elements in b.l.
-          volbl = 0.   ! Volume of elements in boundary layer
-          do e=1,nelv
-          do f=1,nface
-            if (cbc(f,e,0).eq.'mv ') then
-              srfbl = srfbl + vlsum(area(1,1,f,e),nxz )
-              volbl = volbl + vlsum(bm1 (1,1,1,e),nxyz)
-            endif
-          enddo
-          enddo
-          srfbl = glsum(srfbl,1)  ! Sum over all processors
-          volbl = glsum(volbl,1)
-          delta = volbl / srfbl   ! Avg thickness of b.l. elements
-c         delta = 0.02            ! 1/2 separation of cylinders
-          call rone (h1,n)
-          call rzero(h2,n)
-       
-          call cheap_dist_0(d,0,'mv ')
-
-          if (nid.eq.0) write(6,*) "delta: ",delta
-          deltap1 = 1.0*delta  ! Protected b.l. thickness
-          deltap2 = 2.0*delta
-
-c         magic distribution - it really does a better job of preseving BLs 
-          do i=1,n
-            arg1   = -(d(i)/deltap1)**2
-            arg2   = -(d(i)/deltap2)**2
-            h1(i)  = h1(i) + 1000.0*exp(arg1) + 10.0*exp(arg2)
-          enddo
-
           call rone(mask,n)
           do e=1,nelv
           do f=1,nface
@@ -97,33 +108,76 @@ c         magic distribution - it really does a better job of preseving BLs
             if(cbc(f,e,0).eq.'v  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
             if(cbc(f,e,0).eq.'mv ')call facev(mask,e,f,zero,nx1,ny1,nz1)
             if(cbc(f,e,0).eq.'O  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
+            if(cbc(f,e,0).eq.'mvb')then
+              call facev(mask,e,f,zero,nx1,ny1,nz1)
+              nbl = 1
+            endif
           enddo
           enddo
           call dsop(mask,'*  ',nx1,ny1,nz1)    ! dsop mask
           call opzero(delx,dely,delz)
+          nbl = iglsum(nbl,1)
         endif
     
+        napprx(1)=0
+        nappry(1)=0
+        napprz(1)=0
+        nxz   = nx1*nz1
+        nxyz  = nx1*ny1*nz1
+
+        call rone (h1,n)
+        call rzero(h2,n)
+
+        if(nbl.gt.0) then
+          srfbl = 0.   ! Surface area of elements in b.l.
+          volbl = 0.   ! Volume of elements in boundary layer
+          do e=1,nelv
+          do f=1,nface
+            if (cbc(f,e,0).eq.'mvb') then
+              srfbl = srfbl + vlsum(area(1,1,f,e),nxz )
+              volbl = volbl + vlsum(bm1 (1,1,1,e),nxyz)
+            endif
+          enddo
+          enddo
+          srfbl = glsum(srfbl,1)  ! Sum over all processors
+          volbl = glsum(volbl,1)
+       
+          call cheap_dist_0(d,0,'mvb')
+
+          delta=volbl/srfbl
+          if (nid.eq.0) write(6,*) "delta: ",delta
+          deltap1 = 2.0*delta/real(lx1)  ! Protected b.l. thickness
+          deltap2 = 1.0*delta
+
+c       magic distribution - it really does a better job of preseving BLs 
+          do i=1,n
+            arg1   = -(d(i)/deltap1)**2
+            arg2   = -(d(i)/deltap2)**2
+            h1(i)  = h1(i) + fact*(100.0*exp(arg1) + 5.0*exp(arg2))
+            t(i,1,1,1,1) = h1(i)
+          enddo
+        endif
 
         do e=1,nelv
         do f=1,nface
-          if (cbc(f,e,0).eq.'mv ') then
+          if (cbc(f,e,0).eq.'mv '.or.cbc(f,e,0).eq.'mvb') then
            call facec(delx,umeshx,e,f,nx1,ny1,nz1,nelv)
            call facec(dely,umeshy,e,f,nx1,ny1,nz1,nelv)
            call facec(delz,umeshz,e,f,nx1,ny1,nz1,nelv)
           endif
         enddo
         enddo
-        tol = 1.e-8
+        tol = 1.e-6 
 
         if (utx_usr.gt.1e-10)
      &    call laplaceh('mshx',delx,h1,h2,mask,vmult,1,tol,
-     &    500,apprx,napprx)
+     &    1000,apprx,napprx)
         if (uty_usr.gt.1e-10) 
      &    call laplaceh('mshy',dely,h1,h2,mask,vmult,1,tol,
-     &    500,appry,nappry)
-        if (utz_usr.gt.1e-8)
+     &    1000,appry,nappry)
+        if (utz_usr.gt.1e-10)
      &    call laplaceh('mshz',delz,h1,h2,mask,vmult,1,tol,
-     &    500,apprz,napprz)
+     &    1000,apprz,napprz)
 
         call dsavg(delx)
         call dsavg(dely)
@@ -137,14 +191,21 @@ c         magic distribution - it really does a better job of preseving BLs
         call copy(vy,dely,n)
         call copy(vz,delz,n)
 
-c       call print_limits
+        call print_limits
 
-c       time = istep
-c       call prepost(.true.,'mvm')
+        time = istep
+        ifxyos = ifxyo
+        ifxyo = .true.
+        call prepost(.true.,'mvm')
+        ifxyo = ifxyos
+c       call dumpmesh('mvm')
 
         call fix_geom
+        call mesh_metrics
 
       enddo
+
+      ifield = ifield_sv
 
       return
       end
@@ -222,6 +283,7 @@ c    $    (r,n,approx,napprox,h1,h2,mask,mult,ifwt,ifvec,name6)
       tol = abs(tli)
       p22=param(22)
       param(22)=abs(tol)
+      restol(ifield)=tol
       if (nel.eq.nelv) then
         call hmhzpf (name,u,r,h1,h2,mask,mult,imsh,tol,maxi,isd,binvm1)
       else
@@ -239,7 +301,17 @@ c    $     (u,n,approx,napprox,h1,h2,mask,mult,ifwt,ifvec,name6)
 C-----------------------------------------------------------------------
       subroutine cheap_dist_0(d,ifld,b)
 
-c     just like cheak_dist, but uses a hardcoded nelt
+c     Finds a pseudo-distance function.
+
+c     INPUT:  ifld - field type for which distance function is to be found.
+c             ifld = 1 for velocity
+c             ifld = 2 for temperature, etc.
+
+c     OUTPUT: d = "path" distance to nearest wall
+
+c     This approach has a significant advantage that it works for
+c     periodict boundary conditions, whereas most other approaches
+c     will not.
 
       include 'SIZE'
       include 'GEOM'       ! Coordinates
@@ -322,4 +394,3 @@ c     just like cheak_dist, but uses a hardcoded nelt
       enddo
  1000 return
       end
-C-----------------------------------------------------------------------
