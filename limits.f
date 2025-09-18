@@ -147,7 +147,7 @@ c     integer estrd,ipt,wpt
       real up(3),umag,u_p
       real spmin(ldimt-1),spmax(ldimt-1),spave(ldimt-1)
       real glmin,glmax,glsum
-      real sdot
+      real vsdot
       logical ifgrad, ifdid
 
       data ifdid /.false./
@@ -223,9 +223,9 @@ C     initialize the variables AFTER the flags are set
 
 C     Now do the thing
       do e=1,nelv
-        ifgrad=.true.
+        ifgrad=.true. ! only evaluate the gradients once per element
         do isd=1,2*ndim
-          if(cbc(isd,e,1).eq.'W  ')then
+          if(cbc(isd,e,1).eq.'W  ')then ! only do work on walls
             if(ifgrad)then
               call gradm11(gradu(1,1,1,1,1)
      &                    ,gradu(1,1,1,1,2)
@@ -239,12 +239,12 @@ C     Now do the thing
      &                      ,gradu(1,1,1,3,3),vz,e)
               ifgrad=.false.
             endif
-            call backpts(i0,i1,j0,j1,k0,k1,isd)
+            call backpts(i0,i1,j0,j1,k0,k1,isd) ! indices of GLL points 1 away from side isd
             do k=k0,k1
             do j=j0,j1
             do i=i0,i1
               if(msk(i,j,k,e).lt.0.5) then
-                iw=i
+                iw=i ! indices of GLL points on side isd
                 jw=j
                 kw=k
                 if    (isd.eq.1) then
@@ -260,24 +260,24 @@ C     Now do the thing
                 else
                   kw=lz1
                 endif
-                call getSnormal(norm,iw,jw,kw,isd,e)
+                call getSnormal(norm,iw,jw,kw,isd,e) ! wall normal stored in norm
 
                 mu=vdiff(iw,jw,kw,e,1)
                 rho=vtrans(iw,jw,kw,e,1)
                 Pra=1.0
-                if(iftl) then
+                if(iftl) then ! coefficients for outputting T+
                   lambda=vdiff(iw,jw,kw,e,2)
                   cp=vtrans(iw,jw,kw,e,2)/rho
                   Pra=cp*mu/lambda
                 endif
                 do ifld=3,ldimt+1
-                  if(ifpsp(ifld-2))then
+                  if(ifpsp(ifld-2))then !Schmidt numbers for phi+
                     Sc(ifld-2)=vtrans(iw,jw,kw,e,ifld)*mu/(rho*
      &                                           vdiff(iw,jw,kw,e,ifld))
                   endif
                 enddo
 
-                do i2=1,ldim
+                do i2=1,ldim !evaluate tau . norm
                 tau(i2)=0.0
                   do j2=1,ldim
                     tau(i2)=tau(i2)+mu*norm(j2)*
@@ -286,42 +286,52 @@ C     Now do the thing
                 enddo
 
                 vsca=0.0
-                do i2=1,ldim
+                do i2=1,ldim ! evaluate tau . norm . norm
                   vsca=vsca+tau(i2)*norm(i2)
                 enddo
 
-                tauw=0.0
+                tauw=0.0 !tau_wall is the magnitude of the parallel components of tau . norm
                 do i2=1,ldim
                   tauw=tauw+(tau(i2)-vsca*norm(i2))**2
                 enddo
                 tauw=sqrt(tauw)
-                utau=sqrt(tauw/rho)
-                yp=wd(i,j,k,e)*utau*rho/mu
+
+c               Evaluate y_p^+
+                utau=sqrt(tauw/rho) !friction velocity
+                yp=wd(i,j,k,e)*utau*rho/mu !y+
                 ypmin=min(ypmin,yp)
                 ypmax=max(ypmax,yp)
                 ypave=ypave+yp*bm1(i,j,k,e)
+                vol=vol+bm1(i,j,k,e)
+
+c               Evaluate u_p^+
                 up(1)=vx(i,j,k,e) 
                 up(2)=vy(i,j,k,e) 
                 up(3)=vz(i,j,k,e) 
-                umag=sdot(up,norm,1.0) 
-                call vadd(up,norm,-umag) !
+                umag=vsdot(up,norm,1.0) 
+                call vsadd(up,norm,-umag) !
                 umag=sqrt(up(1)**2+up(2)**2+up(3)**2)
                 u_p=umag/utau
                 upmin=min(upmin,u_p)
                 upmax=max(upmax,u_p)
                 upave=upave+u_p*bm1(i,j,k,e)
-                vol=vol+bm1(i,j,k,e)
+
+c               stats for friction velocity
                 if(ifut)then
                   utmin=min(utau,utmin)
                   utmax=max(utau,utmax)
                   utave=utave+utau*bm1(i,j,k,e)
                 endif
+
+c               Evaluate T+
                 if(iftl)then
                   tl=yp*Pra
                   tlmin=min(tlmin,tl)
                   tlmax=max(tlmax,tl)
                   tlave=tlave+tl*bm1(i,j,k,e)
                 endif
+
+c               Evaluate phi+
                 do ifld=1,ldimt-1
                   if(ifpsp(ifld))then
                     psp=yp*Sc(ifld)
@@ -338,6 +348,7 @@ C     Now do the thing
         enddo
       enddo
 
+c     get global min, max, and averages
       ypmin=glmin(ypmin,1)
       ypmax=glmax(ypmax,1)
       ypave=glsum(ypave,1)
@@ -368,11 +379,12 @@ C     Now do the thing
         endif
       enddo
 
+c     write the data to the logfile
       if(nio.eq.0)then
         write(*,255) 'y_p+',ypmin,ypmax,ypave
+        write(*,255) 'u_p+',upmin,upmax,upave
         if(.not.if3d) write(*,255) 'u tau',utmin,utmax,utave
         if(iftl) write(*,255)'T_p+',tlmin,tlmax,tlave
-        write(*,255) 'u_p+',upmin,upmax,upave
         do ifld=1,ldimt-1
           if(ifpsp(ifld)) then
             write(pname,'(a14,i1)') "PS_p+ ",ifld 
@@ -529,27 +541,29 @@ c     integer estrd,ipt,wpt
       return
       end
 c-----------------------------------------------------------------------
-      real function sdot(u,n,scale)
+      real function vsdot(u,n,scl)
+c     scaled vector dot product
 
       include 'SIZE'
       include 'INPUT'
-      real u(3),n(3),scale
+      real u(3),n(3),scl
 
-      sdot = u(1)*n(1)+u(2)*n(2)
-      if(if3d) sdot = sdot + u(3)*n(3)
+      vsdot = u(1)*n(1)+u(2)*n(2)
+      if(if3d) vsdot = vsdot + u(3)*n(3)
 
-      sdot = sdot*scale
+      vsdot = vsdot*scl
 
       return
       end
 c-----------------------------------------------------------------------
-      subroutine vadd(u,n,scale)
+      subroutine vsadd(u,n,scl)
+c     scaled vector addition
 
-      real u(3),n(3)
+      real u(3),n(3),scl
 
-      u(1) = u(1) + scale*n(1)
-      u(2) = u(2) + scale*n(2)
-      u(3) = u(3) + scale*n(3)
+      u(1) = u(1) + scl*n(1)
+      u(2) = u(2) + scl*n(2)
+      u(3) = u(3) + scl*n(3)
 
       return
       end
