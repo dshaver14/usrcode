@@ -143,8 +143,11 @@ c     integer estrd,ipt,wpt
       real tau(3),norm(3),vsca,tauw
       real utau,rho,mu,lambda,cp,Pra,yp,tl,psp,Sc(ldimt-1)
       real ypmin,ypmax,ypave,vol,utmin,utmax,utave,tlmin,tlmax,tlave
+      real upmin,upmax,upave
+      real up(3),umag,u_p
       real spmin(ldimt-1),spmax(ldimt-1),spave(ldimt-1)
       real glmin,glmax,glsum
+      real sdot
       logical ifgrad, ifdid
 
       data ifdid /.false./
@@ -203,6 +206,9 @@ C     initialize the variables AFTER the flags are set
       utmin=1.0e10
       utmax=-1.0e10
       utave=0.0
+      upmin=1.0e10
+      upmax=-1.0e10
+      upave=0.0
       tlmin=1.0e10
       tlmax=-1.0e10
       tlave=0.0
@@ -294,6 +300,16 @@ C     Now do the thing
                 ypmin=min(ypmin,yp)
                 ypmax=max(ypmax,yp)
                 ypave=ypave+yp*bm1(i,j,k,e)
+                up(1)=vx(i,j,k,e) 
+                up(2)=vy(i,j,k,e) 
+                up(3)=vz(i,j,k,e) 
+                umag=sdot(up,norm,1.0) 
+                call vadd(up,norm,-umag) !
+                umag=sqrt(up(1)**2+up(2)**2+up(3)**2)
+                u_p=umag/utau
+                upmin=min(upmin,u_p)
+                upmax=max(upmax,u_p)
+                upave=upave+u_p*bm1(i,j,k,e)
                 vol=vol+bm1(i,j,k,e)
                 if(ifut)then
                   utmin=min(utau,utmin)
@@ -325,8 +341,12 @@ C     Now do the thing
       ypmin=glmin(ypmin,1)
       ypmax=glmax(ypmax,1)
       ypave=glsum(ypave,1)
+      upmin=glmin(upmin,1)
+      upmax=glmax(upmax,1)
+      upave=glsum(upave,1)
       vol=glsum(vol,1)
       ypave=ypave/vol
+      upave=upave/vol
       if(ifut)then
         utmin=glmin(utmin,1)
         utmax=glmax(utmax,1)
@@ -352,6 +372,7 @@ C     Now do the thing
         write(*,255) 'y_p+',ypmin,ypmax,ypave
         if(.not.if3d) write(*,255) 'u tau',utmin,utmax,utave
         if(iftl) write(*,255)'T_p+',tlmin,tlmax,tlave
+        write(*,255) 'u_p+',upmin,upmax,upave
         do ifld=1,ldimt-1
           if(ifpsp(ifld)) then
             write(pname,'(a14,i1)') "PS_p+ ",ifld 
@@ -504,6 +525,31 @@ c     integer estrd,ipt,wpt
 
 
  255  format(a15,5es13.4)
+
+      return
+      end
+c-----------------------------------------------------------------------
+      real function sdot(u,n,scale)
+
+      include 'SIZE'
+      include 'INPUT'
+      real u(3),n(3),scale
+
+      sdot = u(1)*n(1)+u(2)*n(2)
+      if(if3d) sdot = sdot + u(3)*n(3)
+
+      sdot = sdot*scale
+
+      return
+      end
+c-----------------------------------------------------------------------
+      subroutine vadd(u,n,scale)
+
+      real u(3),n(3)
+
+      u(1) = u(1) + scale*n(1)
+      u(2) = u(2) + scale*n(2)
+      u(3) = u(3) + scale*n(3)
 
       return
       end
