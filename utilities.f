@@ -1962,3 +1962,24 @@ C-----------------------------------------------------------------------
       return
       end
 C-----------------------------------------------------------------------
+      subroutine dump_zslice(zz,eps)
+      implicit none
+      include 'SIZE'
+      include 'TOTAL'
+
+      real zz,eps
+      integer i,j,n
+      n=lx1*ly1*lz1
+
+      call izero(out_mask,nelt)
+      do i=1,nelt
+      do j=1,n
+        if(abs(zz-zm1(j,1,1,i)).le.eps) out_mask(i)=1
+      enddo
+      enddo
+
+      call prepost(.true.,'slz')
+      call ione(out_mask,nelt)
+
+      return
+      end
