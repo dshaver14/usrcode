@@ -157,7 +157,6 @@ c         magic distribution - it really does a better job of preseving BLs
               arg2   = -(d(i)/deltap2)
               h1(i)  = h1(i) + 
      &                  fact*(5.0*exp(arg1) +1.0*exp(arg2))*blf(i,1,1,1)
-              t(i,1,1,1,1) = h1(i)
             enddo
           endif
 
@@ -206,7 +205,6 @@ c       call dumpmesh('mvm')
       enddo
 
       call restore_ioflags
-      ifield = ifield_sv
 
       return
       end
@@ -395,3 +393,73 @@ c     will not.
       enddo
  1000 return
       end
+c-----------------------------------------------------------------------
+      subroutine rounded_displacement(delx,dely,delz,RR)
+
+c     This subroutine calculates a displacement vector for a fractional
+c     arc-length preserving transformation from a sharp-cornered hexagon
+c     to a rounded corner hexagon. It assumes a sharp corner is bisected
+c     by the x-axis and the moving boundary has an `mv ` BC in field 0.
+
+      implicit none
+      include 'SIZE'
+      include 'TOTAL'
+
+      real delx(lx1,ly1,lz1,lelt)  !displacement vector
+      real dely(lx1,ly1,lz1,lelt)
+      real delz(lx1,ly1,lz1,lelt)
+      real RR                      !radius of the rounded corner
+
+      integer ifc,iel,i0,i1,j0,j1,k0,k1,i,j,k,n,icorn
+      real x0,xxc,x1,xx0,xx1,y0,yyc,y1,yy0,yy1,s0,s1,theta0,theta1
+      real glmax,psi,ddx,ddy,delmax
+
+      if(RR.le.0) return
+
+      n = lx1*ly1*lz1*nelt
+
+      x0 = glmax(xm1,n)      !coordinate of the sharp edge
+      y0 = 0.0
+      xxc = x0-RR/cos(pi/6.) !center of the rounded edge
+      yyc = 0.0
+      x1 = RR*cos(pi/6.)+xxc !tangent point between rounded edge and hex can
+      y1 = RR*sin(pi/6.)+yyc
+      delmax = RR*(1/cos(pi/6.)-1)
+      if(nio.eq.0) write(*,*) "delmax = ",delmax
+
+      do 10 iel=1,nelv
+      do 10 ifc=1,2*ldim
+        if(cbc(ifc,iel,0).eq.'mv '.and.BoundaryID(ifc,iel).eq.2) then
+          call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
+          do 20 k=k0,k1
+          do 20 j=j0,j1
+          do 20 i=i0,i1
+          do 20 icorn = 0,5
+            psi = real(icorn)*pi/3.
+            xx0 = xm1(i,j,k,iel)
+            yy0 = ym1(i,j,k,iel)
+c           Rotate the reference frame so each corner is aligned with the x-axis
+            call rotate_point_2d(xx0,yy0,0.0,0.0,-psi,xx0,yy0)
+            theta0 = atan2(yy0,xx0)
+            if(abs(theta0).lt.pi/6.) then
+              s0 = (xx0-x0)/(x1-x0)
+              if(s0.lt.1.0) then
+                theta1 = pi/6.*s0
+                xx1 = RR*cos(theta1)+xxc
+                yy1 = RR*sin(theta1)+yyc
+                if(theta0.lt.0.0) yy1=-yy1
+                ddx = xx1-xx0
+                ddy = yy1-yy1
+c               Rotate displacement from aligned reference frame back to original
+                call rotate_point_2d(ddx,ddy,0.0,0.0,psi,ddx,ddy)
+                delx(i,j,k,iel)=ddx
+                dely(i,j,k,iel)=ddy
+              endif
+            endif
+  20      continue
+        endif
+  10  continue
+
+      return
+      end
+c-----------------------------------------------------------------------
