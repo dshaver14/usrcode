@@ -1,0 +1,20 @@
+#Nek5000 parameter file
+[GENERAL]
+polynomialOrder = 6
+startFrom = restart.f00000
+numSteps = 50000
+writeInterval = 5000
+dt = 2.5e-4 #+ targetCFL = 3.5
+#advectionSubcyclingSteps = 3
+regularization = hpfrt + nModes = 2 + scalingCoeff = 5.0
+#constFlowRate = meanVelocity = 1.0 + direction = Z
+
+[PRESSURE]
+residualTol = 1.0e-6
+residualProj = yes
+
+[VELOCITY]
+boundaryTypeMap = W
+viscosity = -5.0e4
+density = 1.0
+residualTol = 1.0e-8
