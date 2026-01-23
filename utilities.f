@@ -1962,14 +1962,42 @@ C-----------------------------------------------------------------------
       return
       end
 C-----------------------------------------------------------------------
+      subroutine dump_slice(pt,nor,eps)
+      implicit none
+      include 'SIZE'
+      include 'TOTAL'
+
+      real pt(3),nor(3),eps,dist
+      integer i,j,n,msk_sv(lelt)
+      n=lx1*ly1*lz1
+
+      call copy(msk_sv,out_mask,nelt)
+
+      call izero(out_mask,nelt)
+      do i=1,nelt
+      do j=1,n
+        dist = (pt(1)-xm1(j,1,1,i))*nor(1) + (pt(2)-ym1(j,1,1,i))*nor(2)
+        if(if3d) dist = dist + (pt(3) - zm1(j,1,1,i))*nor(3)
+        if(abs(dist).le.eps) out_mask(i)=1
+      enddo
+      enddo
+
+      call prepost(.true.,'slc')
+      call copy(out_mask,msk_sv,nelt)
+
+      return
+      end
+C-----------------------------------------------------------------------
       subroutine dump_zslice(zz,eps)
       implicit none
       include 'SIZE'
       include 'TOTAL'
 
       real zz,eps
-      integer i,j,n
+      integer i,j,n,msk_sv(lelt)
       n=lx1*ly1*lz1
+
+      call copy(msk_sv,out_mask,nelt)
 
       call izero(out_mask,nelt)
       do i=1,nelt
@@ -1979,7 +2007,7 @@ C-----------------------------------------------------------------------
       enddo
 
       call prepost(.true.,'slz')
-      call ione(out_mask,nelt)
+      call copy(out_mask,msk_sv,nelt)
 
       return
       end
