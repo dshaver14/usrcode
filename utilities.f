@@ -1997,7 +1997,7 @@ C-----------------------------------------------------------------------
       integer i,j,n,msk_sv(lelt)
       n=lx1*ly1*lz1
 
-      call copy(msk_sv,out_mask,nelt)
+      call icopy(msk_sv,out_mask,nelt)
 
       call izero(out_mask,nelt)
       do i=1,nelt
@@ -2007,7 +2007,7 @@ C-----------------------------------------------------------------------
       enddo
 
       call prepost(.true.,'slz')
-      call copy(out_mask,msk_sv,nelt)
+      call icopy(out_mask,msk_sv,nelt)
 
       return
       end
