@@ -1,5 +1,359 @@
 c----------------------------------------------------------------------
-      subroutine ww_mv_mesh(dxo,dyo,dzo,nstps,blf)
+      subroutine make_wire_wrap(nrings,Pptch,Wptch,Dwire,Rcan,Rf0,sunk0,
+     &           PBID,HCID)
+      implicit none
+      include 'SIZE'
+      include 'GEOM'
+      include 'TSTEP'
+      include 'SOLN'
+      include 'INPUT' 
+
+c     Inputs
+      integer nrings !number of pin layers/rings
+      integer PBID   !boundary ID of the pins
+      integer HCID   !boundary ID of the hex-can
+      real Pptch !center to center distance of pins
+      real Wptch !height of a single wire helix (negative for LH)
+      real Dwire !diameter of the wire
+      real Rf0   !radius of the wire/pin filet
+      real Rcan  !radius for rounding the corners of the hexcan
+      real sunk0 !distance to sink the wire into the pin
+
+c     variables for adding the wires
+      integer ipin,jpin,lpins,niters
+      integer i,i0,i1,j,j0,j1,k,k0,k1,iel,ifc,n,ilayer
+      parameter(lpins=271) 
+
+      real pio3,pio6 !pi/3,pi/6
+      real Rp,Rw,Rf,sunk,d1,d2,d3,theta1,theta2,theta3 !geometric constants
+      real xmn,xmx,ymn,ymx,zmn,zmx,apoth,nturns !additional geometric constants
+      real delT,T1,T2,T1_x,T1_y,T2_x,T2_y,T3,T4,Ttot,psi !arc length constants for step 1
+      real S3,S4,S5,S6,Stot !arc length constants for step 2
+      real xx,yy,zz,rr,thw,xpt,ypt,zpt,theta,thloc,xnew,ynew,xr,yr !local variables
+
+      integer pindx(lx1,ly1,lz1,lelt) !pin ID number
+      real xxc(lpins),yyc(lpins) !pin center coordinates
+      real spt(lx1,ly1,lz1,lelt),sptl !arc length
+      real delx(lx1,ly1,lz1,lelt) !x-displacement 
+      real dely(lx1,ly1,lz1,lelt) !y-displacement
+      real delz(lx1,ly1,lz1,lelt) !z-displacement (not needed)
+      real thetawire(lx1,ly1,lz1,lelt) !local wire angle
+
+      logical dopin(0:lpins)
+      logical ifoutiters
+
+c     variables for hexcan modification
+      logical dohexcan
+      real alpha,xi1,xi2,fact
+
+c     variables for wire trimming (not yet supported)
+      logical dotrim,perhex
+      real cpinangles(5)
+      real spinangles(5)
+      real xtrim,ytrim,dtrim,rtrim,rnew
+      integer iang
+
+c     data initialization
+
+      data dopin /.false.,lpins*.true./
+
+      if(nrings.gt.10) then 
+        if(nio.eq.0) write(*,*) 
+     &    "Error: too many pin layers. Increase lpins in make_wire_wrap"
+        call exitt
+      endif
+
+      n = lx1*ly1*lz1*nelt
+      niters = 20 !number of iterations for deforming the mesh
+      ifoutiters = .false. !output mesh at every iteration
+      pio3 = pi/3.
+      pio6 = pi/6.
+
+      call izero(pindx,n)
+      call rzero(delx,n)
+      call rzero(dely,n)
+      call rzero(delz,n)
+
+c     trim angles for corner pins
+      cpinangles(1) = pio6
+      cpinangles(2) = 2*pio3
+      cpinangles(3) = pi
+      cpinangles(4) = 4*pio3
+      cpinangles(5) = 11.*pio6
+
+c     trim angles for side pins
+      spinangles(1) = pio6
+      spinangles(2) = 2.*pio3
+      spinangles(3) = pi
+      spinangles(4) = 4.*pio3
+      spinangles(5) = 5.*pio3
+
+      dotrim = .false. !trim the wires (not supported)
+      perhex = .false. !single pin in fully periodic domain
+      dohexcan = .false. !modify the hexcan
+      if(Rcan.gt.0.) dohexcan = .true.
+
+c     skip adding wire to individual pins
+c     dopin(2)= .false.
+c     dopin(4)= .false.
+c     dopin(6)= .false.
+
+      call domain_size(xmn,xmx,ymn,ymx,zmn,zmx)
+      call pincenters(xxc,yyc,nrings,Pptch)
+
+      nturns =  (zmx-zmn)/Wptch   !negative for left-handed wires
+      call copy(thetawire,zm1,n)
+      call rescale_x(thetawire,0.0,nturns*2.*pi)
+      apoth = (ymx-ymn)/2.    !hexcan apothem
+
+      Rp = 0.5 !pin radius
+      Rw = Dwire*0.5
+      Rf = Rf0
+      if(Rf0.lt.0.) Rf = -Rf0*Rw  !filet radius
+      sunk = sunk0
+      if(sunk0.lt.0.) sunk = -sunk0*Rw !sink the wire into the pin
+c     dtrim = Rp+(Pptch-1.0)-0.05*2.*Rw !not supported
+
+C     what comes next is particularly esoteric...
+c     distances between the centerpoints of pin, wire, and filet circles
+      d1 = Rp+Rw-sunk      !pin to wire
+      d2 = Rp+Rf           !pin to filet
+      d3 = Rf+Rw           !filet to wire
+
+c     angles between the centerpoints of pin, wire, and filet
+      theta1 = acos((d2**2+d3**2-d1**2)/(2.0*d2*d3)) ! filet angle, opposite d1
+      theta2 = acos((d1**2+d3**2-d2**2)/(2.0*d1*d3)) ! wire angle, opposite d2
+      theta3 = pi - theta1 - theta2                  ! pin angle, opposite d3
+c     if(nio.eq.0) write(6,*)
+c    &                      theta1*180./pi,theta2*180./pi,theta3*180./pi
+
+c     arc lengths of the transitions between circles, S4 < S3 < S6 < S5
+c     middle of the wire is 0
+      S4=Rw*(pi-theta2)       !transition from wire to filet on top
+      S3=S4+Rf*theta1         !filet to pin
+      S6=S3+2.*(pi-theta3)*Rp !pin to filet on bottom
+      S5=S6+Rf*theta1         !filet to wire on bottom
+      Stot=S5+S4              !total length of the perimeter
+
+c     arc lengths for the first step
+      psi = acos((Rp - Rw)/d1)
+      delT = d1*sin(psi)
+      T1  = Rw*psi
+      T1_x = d1 + Rw*cos(psi)
+      T1_y = Rw * sin(psi)
+      T2  = T1 + delT
+      T2_x = Rp*cos(psi)
+      T2_y = Rp*sin(psi)
+      Ttot= 2.*(T2 + (pi - psi)*Rp)
+      T3  = Ttot - T2
+      T4  = Ttot - T1
+
+c     set the cbc array for mesh helmholtz solver
+      do iel = 1,nelt
+      do ifc = 1,2*ndim
+        cbc(ifc,iel,0)=cbc(ifc,iel,1)
+      enddo
+      enddo
+      call setbc(PBID,0,'mv ')
+      call setbc(HCID,0,'mv ')
+
+c     First, assign pin index and get the fractional arc length for all points on the pin surface
+      do 010 iel = 1,nelt
+      do 010 ifc = 1,2*ldim
+        if(BoundaryID(ifc,iel).eq.PBID) then
+          ipin = 0
+          do 011 ilayer=1,nrings
+          do 011 jpin = 1,max(1,6*(ilayer-1))
+            ipin = ipin+1
+            call get_face_m1centroid(xx,yy,zz,rr,iel,ifc)
+            rr=sqrt((xx-xxc(ipin))**2+(yy-yyc(ipin))**2) !need radius to pin center, not origin
+            if (abs(rr-Rp).lt.5.e-2) then
+              call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
+              do 020 k=k0,k1
+              do 020 j=j0,j1
+              do 020 i=i0,i1
+                pindx(i,j,k,iel) = ipin
+                if(dopin(ipin)) then
+                  xpt=xm1(i,j,k,iel)-xxc(ipin)
+                  ypt=ym1(i,j,k,iel)-yyc(ipin)
+                  thw = mod(thetawire(i,j,k,iel),2.*pi)
+                  theta = atan2(ypt,xpt) - thw + 4.*pi
+                  theta = mod(theta,2.*pi)
+                  sptl = theta/(2.*pi)
+                  spt(i,j,k,iel) = sptl
+cc                 experimental code to remap points 
+c                 sptl = theta/pi !0 < S < 2
+c                 if(sptl.le.1.0) then !0 < S < 1
+c                   sptl=(Y0-1.)*sptl*sptl+(2.-Y0)*sptl
+c                 elseif(sptl.gt.1.0) then  ! 1 < S < 2
+c                   sptl = 2.- sptl
+c                   sptl = (Y0-1.)*sptl*sptl+(2.-Y0)*sptl
+c                   sptl = 2.- sptl
+c                 endif
+c                 spt(i,j,k,iel) = sptl/2.0
+                endif
+ 020          continue
+            endif
+ 011      continue
+        endif
+ 010  continue
+
+c     step 1: add a wire with infinite filet radius
+      do i=1,n
+        ipin=pindx(i,1,1,1)
+        if(dopin(ipin)) then !always skip ipin = 0
+          xpt=xm1(i,1,1,1)-xxc(ipin)
+          ypt=ym1(i,1,1,1)-yyc(ipin)
+          thw = thetawire(i,1,1,1)
+          sptl = spt(i,1,1,1) * Ttot !load from array
+C         Determine boundary displacement
+          if(sptl.le.T1) then
+            thloc = sptl/T1*psi
+            xnew = d1 + Rw*cos(thloc)
+            ynew = Rw*sin(thloc)
+          elseif(sptl.le.T2) then
+            xnew = (sptl-T1)/delT*(T2_x-T1_x)+T1_x
+            ynew = (sptl-T1)/delT*(T2_y-T1_y)+T1_y
+          elseif(sptl.le.T3) then
+            thloc = psi + (sptl-T2)/Rp
+            xnew = Rp*cos(thloc)
+            ynew = Rp*sin(thloc)
+          elseif(sptl.le.T4) then
+            xnew = (sptl-T3)/delT*(T1_x-T2_x)+T2_x
+            ynew =((sptl-T3)/delT*(T1_y-T2_y)+T2_y)*(-1.)
+          else
+            thloc = (sptl-Ttot)/T1*psi
+            xnew = d1 + Rw*cos(thloc)
+            ynew = Rw*sin(thloc)
+          endif
+          call rotate_point_2d(xnew,ynew,0.0,0.0,thw,xr,yr)
+          delx(i,1,1,1) = xr - xpt
+          dely(i,1,1,1) = yr - ypt
+        endif
+      enddo
+
+c     If you're going to modify the hexcan, I recommend you do it in step 1
+      if(dohexcan) call rounded_displacement(delx,dely,delz,Rcan,HCID)
+
+      call ww_mv_mesh(delx,dely,delz,niters,ifoutiters,'st1') !execute step 1
+
+c     reset displacement arrays
+      call rzero(delx,n)
+      call rzero(dely,n)
+      call rzero(delz,n)
+
+c     step 2: add the filet
+      do i=1,n
+        ipin=pindx(i,1,1,1)
+        if(dopin(ipin)) then
+          xpt=xm1(i,1,1,1)-xxc(ipin)
+          ypt=ym1(i,1,1,1)-yyc(ipin)
+          thw = thetawire(i,1,1,1)
+          sptl = spt(i,1,1,1) * Stot !load from array
+          if(sptl.gt.S5) then !on the bottom of the wire
+            thloc = (sptl-S5)/Rw+pi+theta2
+            xnew=D1+Rw*cos(thloc)
+            ynew=Rw*sin(thloc)
+          elseif(sptl.gt.S6) then !on the bottom fillet
+            thloc = (S5-sptl)/Rf+theta2
+            xnew=  D2*cos(theta3)+Rf*cos(thloc)
+            ynew= -D2*sin(theta3)+Rf*sin(thloc)
+          elseif(sptl.gt.S3) then !on the pin
+            thloc = (sptl-S3)/Rp+theta3
+            xnew= Rp*cos(thloc)
+            ynew= Rp*sin(thloc)
+          elseif(sptl.gt.S4) then !on the top fillet
+            thloc = (S3-sptl)/Rf+pi+theta3
+            xnew= D2*cos(theta3)+Rf*cos(thloc)
+            ynew= D2*sin(theta3)+Rf*sin(thloc)
+          else  !on the top of the wire
+            thloc =sptl/Rw
+            xnew= D1+Rw*cos(thloc)
+            ynew= Rw*sin(thloc)
+          endif
+          call rotate_point_2d(xnew,ynew,0.0,0.0,thw,xr,yr)
+          delx(i,1,1,1) = xr - xpt
+          dely(i,1,1,1) = yr - ypt
+        endif
+      enddo
+
+      call ww_mv_mesh(delx,dely,delz,niters,ifoutiters,'st2') !execute step 2
+
+      return
+      end     
+c-----------------------------------------------------------------------
+      subroutine rounded_displacement(delx,dely,delz,RR,bid)
+
+c     This subroutine calculates a displacement vector for a fractional
+c     arc-length preserving transformation from a sharp-cornered hexagon
+c     to a rounded corner hexagon. It assumes a sharp corner is bisected
+c     by the x-axis.
+
+      implicit none
+      include 'SIZE'
+      include 'TOTAL'
+
+      real delx(lx1,ly1,lz1,lelt)  !displacement vector
+      real dely(lx1,ly1,lz1,lelt)
+      real delz(lx1,ly1,lz1,lelt)
+      real RR                      !radius of the rounded corner
+      integer bid !boundary ID to modify
+
+      integer ifc,iel,i0,i1,j0,j1,k0,k1,i,j,k,n,icorn
+      real x0,xxc,x1,xx0,xx1,y0,yyc,y1,yy0,yy1,s0,s1,theta0,theta1
+      real glmax,psi,ddx,ddy,delmax
+
+      if(RR.le.0) return
+
+      n = lx1*ly1*lz1*nelt
+
+      x0 = glmax(xm1,n)      !coordinate of the sharp edge
+      y0 = 0.0
+      xxc = x0-RR/cos(pi/6.) !center of the rounded edge
+      yyc = 0.0
+      x1 = RR*cos(pi/6.)+xxc !tangent point between rounded edge and hexcan
+      y1 = RR*sin(pi/6.)+yyc
+      delmax = RR*(1/cos(pi/6.)-1)
+c     if(nio.eq.0) write(*,*) "delmax = ",delmax
+
+      do 10 iel=1,nelv
+      do 10 ifc=1,2*ldim
+        if(cbc(ifc,iel,0).eq.'mv '.and.BoundaryID(ifc,iel).eq.bid) then
+          call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
+          do 20 k=k0,k1
+          do 20 j=j0,j1
+          do 20 i=i0,i1
+          do 20 icorn = 0,5
+            psi = real(icorn)*pi/3.
+            xx0 = xm1(i,j,k,iel)
+            yy0 = ym1(i,j,k,iel)
+c           Rotate the reference frame so each corner is aligned with the x-axis
+            call rotate_point_2d(xx0,yy0,0.0,0.0,-psi,xx0,yy0)
+            theta0 = atan2(yy0,xx0)
+            if(abs(theta0).lt.pi/6.) then
+              s0 = (xx0-x0)/(x1-x0)
+              if(s0.lt.1.0) then
+                theta1 = pi/6.*s0
+                xx1 = RR*cos(theta1)+xxc
+                yy1 = RR*sin(theta1)+yyc
+                if(theta0.lt.0.0) yy1=-yy1
+                ddx = xx1-xx0
+                ddy = yy1-yy1
+c               Rotate displacement from aligned reference frame back to original
+                call rotate_point_2d(ddx,ddy,0.0,0.0,psi,ddx,ddy)
+                delx(i,j,k,iel)=ddx
+                dely(i,j,k,iel)=ddy
+              endif
+            endif
+  20      continue
+        endif
+  10  continue
+
+      return
+      end
+
+c----------------------------------------------------------------------
+      subroutine ww_mv_mesh(dxo,dyo,dzo,nstps,ifout,na3)
 
 c     This subroutine solves for and applies the overall mesh 
 c     displacement when provided with the displacment vector on boundaries
@@ -7,10 +361,10 @@ c     with the 'mv ' BC in field 0.
 
       include 'SIZE'
       include 'TOTAL'
+      character*3 na3
       real umeshx(lx1,ly1,lz1,lelt),dxo(lx1,ly1,lz1,lelt)
       real umeshy(lx1,ly1,lz1,lelt),dyo(lx1,ly1,lz1,lelt)
       real umeshz(lx1,ly1,lz1,lelt),dzo(lx1,ly1,lz1,lelt)
-      real blf(lx1,ly1,lz1,lelt)
       parameter (lt = lx1*ly1*lz1*lelt)
       common /mrthoi/ napprx(2),nappry(2),napprz(2)
       common /mrthov/ apprx(lt,0:mxprev)
@@ -22,7 +376,7 @@ c     with the 'mv ' BC in field 0.
       real zero,one
       integer e,f,nstps,ifield_sv,nbl
       integer icalld
-      logical ifxyos
+      logical ifxyos,ifout
       save    icalld
       data    icalld /0/
 
@@ -78,10 +432,13 @@ c     For linear relaxation
       call clear_ioflags
       ifxyo = .true.
       ifvo = .true.
-      ifto = .true.
-      call prepost(.true.,'mvm')
+      if(nstps.gt.1.and.ifout) then !never have 2 files because of Paraview...
+        call copy(vx,dxo,n)
+        call copy(vy,dyo,n)
+        call copy(vz,dzo,n)
+        call prepost(.true.,na3)
+      endif
       nbl = 0
-c     call dumpmesh('mvm')
 
       do istep = 1,nstps
 c       factor for decaying boundary layer preservation
@@ -111,11 +468,11 @@ c       call cmult(umeshz,relax,n)
           call rone(mask,n)
           do e=1,nelv
           do f=1,nface
-            if(cbc(f,e,0).eq.'W  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
-            if(cbc(f,e,0).eq.'W1 ')call facev(mask,e,f,one ,nx1,ny1,nz1)
-            if(cbc(f,e,0).eq.'v  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
+c           if(cbc(f,e,0).eq.'W  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
+c           if(cbc(f,e,0).eq.'W1 ')call facev(mask,e,f,one ,nx1,ny1,nz1)
+c           if(cbc(f,e,0).eq.'v  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
+c           if(cbc(f,e,0).eq.'O  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
             if(cbc(f,e,0).eq.'mv ')call facev(mask,e,f,zero,nx1,ny1,nz1)
-            if(cbc(f,e,0).eq.'O  ')call facev(mask,e,f,zero,nx1,ny1,nz1)
             if(cbc(f,e,0).eq.'mvb')then
               call facev(mask,e,f,zero,nx1,ny1,nz1)
               nbl = 1
@@ -127,38 +484,38 @@ c       call cmult(umeshz,relax,n)
           nbl = iglsum(nbl,1)
         endif ! icalld
 
-          call rone (h1,n)
-          call rzero(h2,n)
+        call rone (h1,n)
+        call rzero(h2,n)
 
-          if(nbl.gt.0) then
-            srfbl = 0.   ! Surface area of elements in b.l.
-            volbl = 0.   ! Volume of elements in boundary layer
-            do e=1,nelv
-            do f=1,nface
-              if (cbc(f,e,0).eq.'mvb') then
-                srfbl = srfbl + vlsum(area(1,1,f,e),nxz )
-                volbl = volbl + vlsum(bm1 (1,1,1,e),nxyz)
-              endif
-            enddo
-            enddo
-            srfbl = glsum(srfbl,1)  ! Sum over all processors
-            volbl = glsum(volbl,1)
-         
-            call cheap_dist_0(d,0,'mvb')
-  
-            delta=volbl/srfbl
-            if (nid.eq.0) write(6,*) "delta: ",delta
-            deltap1 = 2.0*delta! /real(lx1)  ! Protected b.l. thickness
-            deltap2 = 2.0*delta
-  
+        if(nbl.gt.0) then
+          srfbl = 0.   ! Surface area of elements in b.l.
+          volbl = 0.   ! Volume of elements in boundary layer
+          do e=1,nelv
+          do f=1,nface
+            if (cbc(f,e,0).eq.'mvb') then
+              srfbl = srfbl + vlsum(area(1,1,f,e),nxz )
+              volbl = volbl + vlsum(bm1 (1,1,1,e),nxyz)
+            endif
+          enddo
+          enddo
+          srfbl = glsum(srfbl,1)  ! Sum over all processors
+          volbl = glsum(volbl,1)
+       
+          call cheap_dist_0(d,0,'mvb')
+
+          delta=volbl/srfbl
+          if (nid.eq.0) write(6,*) "delta: ",delta
+          deltap1 = 2.0*delta! /real(lx1)  ! Protected b.l. thickness
+          deltap2 = 2.0*delta
+
 c         magic distribution - it really does a better job of preseving BLs 
-            do i=1,n
-              arg1   = -(d(i)/deltap1)**2
-              arg2   = -(d(i)/deltap2)
-              h1(i)  = h1(i) + 
-     &                  fact*(5.0*exp(arg1) +1.0*exp(arg2))*blf(i,1,1,1)
-            enddo
-          endif
+          do i=1,n
+            arg1   = -(d(i)/deltap1)**2
+            arg2   = -(d(i)/deltap2)
+            h1(i)  = h1(i) + 
+     &                  fact*(5.0*exp(arg1) +1.0*exp(arg2))
+          enddo
+        endif
 
         do e=1,nelv
         do f=1,nface
@@ -193,18 +550,31 @@ c         magic distribution - it really does a better job of preseving BLs
         call copy(vy,dely,n)
         call copy(vz,delz,n)
 
-        call print_limits
-
         time = istep
-        call prepost(.true.,'mvm')
-c       call dumpmesh('mvm')  
+        if(ifout) call prepost(.true.,na3)
 
         call fix_geom
-        call mesh_metrics
+        call mesh_metrics(.true.)
+
+        djmin = vlmin(JACM1,n)
+        djmax = vlmax(JACM1,n)
+
+c       djave = glsum(JACM1,n)/real(nelgv*lx1*ly1*lz1)
+c        do i=1,n
+c         djave = djave + JACM1(i,1,1,1)
+c       enddo
+c       djave = glsum(djave,1)/real(nelgv*lx1*ly1*lz1)
+
+        if(nio.eq.0) then 
+          write(6,'(A,1p2E9.2)') ' Absolute Jacobian  min/max:',
+     &      djmin,djmax
+          write(6,*)
+        endif
 
       enddo
 
       call restore_ioflags
+      ifield = ifield_sv
 
       return
       end
@@ -393,73 +763,164 @@ c     will not.
       enddo
  1000 return
       end
+
 c-----------------------------------------------------------------------
-      subroutine rounded_displacement(delx,dely,delz,RR)
-
-c     This subroutine calculates a displacement vector for a fractional
-c     arc-length preserving transformation from a sharp-cornered hexagon
-c     to a rounded corner hexagon. It assumes a sharp corner is bisected
-c     by the x-axis and the moving boundary has an `mv ` BC in field 0.
-
-      implicit none
-      include 'SIZE'
-      include 'TOTAL'
-
-      real delx(lx1,ly1,lz1,lelt)  !displacement vector
-      real dely(lx1,ly1,lz1,lelt)
-      real delz(lx1,ly1,lz1,lelt)
-      real RR                      !radius of the rounded corner
-
-      integer ifc,iel,i0,i1,j0,j1,k0,k1,i,j,k,n,icorn
-      real x0,xxc,x1,xx0,xx1,y0,yyc,y1,yy0,yy1,s0,s1,theta0,theta1
-      real glmax,psi,ddx,ddy,delmax
-
-      if(RR.le.0) return
-
-      n = lx1*ly1*lz1*nelt
-
-      x0 = glmax(xm1,n)      !coordinate of the sharp edge
-      y0 = 0.0
-      xxc = x0-RR/cos(pi/6.) !center of the rounded edge
-      yyc = 0.0
-      x1 = RR*cos(pi/6.)+xxc !tangent point between rounded edge and hex can
-      y1 = RR*sin(pi/6.)+yyc
-      delmax = RR*(1/cos(pi/6.)-1)
-      if(nio.eq.0) write(*,*) "delmax = ",delmax
-
-      do 10 iel=1,nelv
-      do 10 ifc=1,2*ldim
-        if(cbc(ifc,iel,0).eq.'mv '.and.BoundaryID(ifc,iel).eq.2) then
-          call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
-          do 20 k=k0,k1
-          do 20 j=j0,j1
-          do 20 i=i0,i1
-          do 20 icorn = 0,5
-            psi = real(icorn)*pi/3.
-            xx0 = xm1(i,j,k,iel)
-            yy0 = ym1(i,j,k,iel)
-c           Rotate the reference frame so each corner is aligned with the x-axis
-            call rotate_point_2d(xx0,yy0,0.0,0.0,-psi,xx0,yy0)
-            theta0 = atan2(yy0,xx0)
-            if(abs(theta0).lt.pi/6.) then
-              s0 = (xx0-x0)/(x1-x0)
-              if(s0.lt.1.0) then
-                theta1 = pi/6.*s0
-                xx1 = RR*cos(theta1)+xxc
-                yy1 = RR*sin(theta1)+yyc
-                if(theta0.lt.0.0) yy1=-yy1
-                ddx = xx1-xx0
-                ddy = yy1-yy1
-c               Rotate displacement from aligned reference frame back to original
-                call rotate_point_2d(ddx,ddy,0.0,0.0,psi,ddx,ddy)
-                delx(i,j,k,iel)=ddx
-                dely(i,j,k,iel)=ddy
-              endif
-            endif
-  20      continue
-        endif
-  10  continue
-
-      return
-      end
+C Old code that might come in handy one day
 c-----------------------------------------------------------------------
+
+c     old indexing algorithm with wire trimming
+c      do 110 iel = 1,nelt
+c      do 110 ifc = 1,2*ldim
+c        if(BoundaryID(ifc,iel).eq.1) then  !make the wire-wraps
+c          ipin = 0
+c          do 111 ilayer=1,nrings
+c          do 111 jpin = 1,max(1,6*(ilayer-1))
+c            ipin = ipin+1
+c            if(dopin(ipin)) then
+c              call get_face_m1centroid(xx,yy,zz,rr,iel,ifc)
+c              rr=sqrt((xx-xxc(ipin))**2+(yy-yyc(ipin))**2)
+c              if (abs(rr-0.5).lt.5.e-2) then
+c                call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
+c                do 120 k=k0,k1
+c                do 120 j=j0,j1
+c                do 120 i=i0,i1
+c                  xpt=xm1(i,j,k,iel)-xxc(ipin)
+c                  ypt=ym1(i,j,k,iel)-yyc(ipin)
+c                  thw = tmax*zm1(i,j,k,iel)
+c                  sptl = spt(i,j,k,iel) * Ttot !load from array
+cC                 Determine boundary displacement
+c                  if(sptl.le.T1) then
+c                    thloc = sptl/T1*psi1
+c                    xnew = d1 + Rw*cos(thloc)
+c                    ynew = Rw*sin(thloc)
+c                  elseif(sptl.le.T2) then
+c                    xnew = (sptl-T1)/delT*(T2_x-T1_x)+T1_x
+c                    ynew = (sptl-T1)/delT*(T2_y-T1_y)+T1_y
+c                  elseif(sptl.le.T3) then
+c                    thloc = psi1 + (sptl-T2)/Rp
+c                    xnew = Rp*cos(thloc)
+c                    ynew = Rp*sin(thloc)
+c                  elseif(sptl.le.T4) then
+c                    xnew = (sptl-T3)/delT*(T1_x-T2_x)+T2_x
+c                    ynew =((sptl-T3)/delT*(T1_y-T2_y)+T2_y)*(-1.)
+c                  else
+c                    thloc = (sptl-Ttot)/T1*psi1
+c                    xnew = d1 + Rw*cos(thloc)
+c                    ynew = Rw*sin(thloc)
+c                  endif
+c                  call rotate_point_2d(xnew,ynew,0.0,0.0,thw,xr,yr)
+c
+cc   Trim the tips of the wires, if necessary, do this last??
+c                  if(dotrim) then
+c                    if((nrings.eq.1).and.(.not.perhex)) then !only 1 pin, special case, UNTESTED!!
+c                      theta=atan2(yr,xr)
+c                      rnew=sqrt(xr*xr+yr*yr)
+c                      if(theta.lt.0.0) theta = theta + 2.*pi
+c                      alpha=mod(theta,psi)-psi/2.
+c                      rtrim = dtrim/cos(alpha)
+c                      rnew=min(rnew,rtrim)
+c                      xr=rnew*cos(theta)
+c                      yr=rnew*sin(theta)
+c                    elseif((ilayer.lt.nrings).or.perhex) then !internal layers do all 6 angles
+c                      theta=atan2(yr,xr)
+c                      rnew=sqrt(xr*xr+yr*yr)
+c                      if(theta.lt.0.0) theta = theta + 2.*pi
+c                      alpha=mod(theta+psi/2.,psi)-psi/2.
+c                      rtrim = dtrim/cos(alpha)
+c                      rnew=min(rnew,rtrim)
+c                      xr=rnew*cos(theta)
+c                      yr=rnew*sin(theta)
+c                    elseif(nrings.eq.2.or.
+c     &                            mod(jpin,max(1,nrings-1)).eq.1) then !corner pin
+c                      theta=atan2(yr,xr)
+c                      rnew=sqrt(xr*xr+yr*yr)
+c                      if(theta.lt.0.0) theta = theta + 2.*pi
+c                      alpha=2.*pi
+c                      do iang=1,5
+c                        thw=theta-floor(real(jpin-1)/real(nrings-1))
+c     &                                                           *psi
+c                        if(thw.lt.0.0) thw=thw+2.*pi
+c                        alpha=min(alpha,abs(thw-cpinangles(iang)))
+c                      enddo
+c                      rtrim = dtrim/cos(alpha)
+c                      rnew=min(rnew,rtrim)
+c                      xr=rnew*cos(theta)
+c                      yr=rnew*sin(theta)
+c                    else !side pins
+c                      theta=atan2(yr,xr)
+c                      rnew=sqrt(xr*xr+yr*yr)
+c                      if(theta.lt.0.0) theta = theta + 2.*pi
+c                      alpha=2.*pi
+c                      do iang=1,5
+c                        thw=theta-floor(real(jpin-1)/real(nrings-1))
+c     &                                                         *psi
+c                        if(thw.lt.0.0) thw=thw+2.*pi
+c                        alpha=min(alpha,abs(thw-spinangles(iang)))
+c                      enddo
+c                      rtrim = dtrim/cos(alpha)
+c                      rnew=min(rnew,rtrim)
+c                      xr=rnew*cos(theta)
+c                      yr=rnew*sin(theta)
+c                    endif
+c                  endif
+c                  delx(i,j,k,iel) = xr - xpt
+c                  dely(i,j,k,iel) = yr - ypt
+c 120            continue
+c              endif
+c            endif
+c 111      continue
+c        endif
+c 110  continue
+
+c     morph the hexcan if necessary
+c     if(dohexcan) then
+c       do 310 iel = 1,nelt
+c       do 310 ifc = 1,2*ldim
+c         if(BoundaryID(ifc,iel).eq.2) then  !modify the hex-can
+c           call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
+c           do 321 k=k0,k1
+c           do 321 j=j0,j1
+c           do 321 i=i0,i1
+c             xpt=xm1(i,j,k,iel)
+c             ypt=ym1(i,j,k,iel)
+c             theta=atan2(ypt,xpt)
+c             if(theta.lt.0.0) theta = theta + 2.*pi
+c             alpha = theta - mod(theta,pio3)
+c             call rotate_point_2d(xpt,ypt,0.0,0.0,-alpha,xnew,ynew)
+c             sptl = ((xnew-xi1)/(xi2-xi1)+alpha/pio3)/6.
+c             theta = 2.*pi*sptl
+c             zpt = zm1(i,j,k,iel)/(2.*pi)
+c             fact = 1.-(2.*zpt-1.)**2
+c             delx(i,j,k,iel) = (xi1*cos(theta) - xpt)*fact*0.65
+c             dely(i,j,k,iel) = (xi1*sin(theta) - ypt)*fact*0.65
+c321        continue
+c         endif
+c310    continue
+c     endif
+
+c     calculate effective conductivity for mesh solve to preserve BL in the filet, but NOT on the wire
+c     thcr=1.1*atan(Rw/(Rp))
+c     wdth=4.0
+c     do i=1,n
+c       xpt = xm1(i,1,1,1)
+c       ypt = ym1(i,1,1,1)
+c       thw = thetawire(i,1,1,1)
+c       thp = mod(thw+pi/6.,pi/3.)-pi/6.
+c       thb = thw-thp
+c       if(thb.gt.pi) then
+c         tho = thb-pi
+c       else
+c         tho = thb+pi
+c       endif
+c       tho = tho - thp !theta of the opposing wire
+c       theta = atan2(ypt,xpt)
+c       thw = thw-theta
+c       tho = tho-theta
+c       if(thw.gt.pi) thw = thw-2.*pi
+c       if(thw.lt.-pi) thw = thw+2.*pi
+c       if(tho.gt.pi) tho = tho-2.*pi
+c       if(tho.lt.-pi) tho = tho+2.*pi
+c       bl(i)=0.25
+c    &   *(tanh(wdth*(abs(thw)/thcr-1.))+1.0)
+c    &   *(tanh(wdth*(abs(tho)/thcr-1.))+1.0)
+c     enddo
