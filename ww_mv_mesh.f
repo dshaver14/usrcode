@@ -29,7 +29,7 @@ c     variables for adding the wires
       real xmn,xmx,ymn,ymx,zmn,zmx,apoth,nturns !additional geometric constants
       real delT,T1,T2,T1_x,T1_y,T2_x,T2_y,T3,T4,Ttot,psi !arc length constants for step 1
       real S3,S4,S5,S6,Stot !arc length constants for step 2
-      real xx,yy,zz,rr,thw,xpt,ypt,zpt,theta,thloc,xnew,ynew,xr,yr !local variables
+      real ftol,xx,yy,zz,rr,thw,xpt,ypt,zpt,theta,thloc,xnew,ynew,xr,yr !local variables
 
       integer pindx(lx1,ly1,lz1,lelt) !pin ID number
       real xxc(lpins),yyc(lpins) !pin center coordinates
@@ -157,6 +157,7 @@ c     set the cbc array for mesh helmholtz solver
       call setbc(PBID,0,'mv ')
       call setbc(HCID,0,'mv ')
 
+      ftol = 0.1*(Pptch-1.0) !tolerance for determining pin index
 c     First, assign pin index and get the fractional arc length for all points on the pin surface
       do 010 iel = 1,nelt
       do 010 ifc = 1,2*ldim
@@ -165,13 +166,16 @@ c     First, assign pin index and get the fractional arc length for all points o
           do 011 ilayer=1,nrings
           do 011 jpin = 1,max(1,6*(ilayer-1))
             ipin = ipin+1
-            call get_face_m1centroid(xx,yy,zz,rr,iel,ifc)
-            rr=sqrt((xx-xxc(ipin))**2+(yy-yyc(ipin))**2) !need radius to pin center, not origin
-            if (abs(rr-Rp).lt.5.e-2) then
-              call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
-              do 020 k=k0,k1
-              do 020 j=j0,j1
-              do 020 i=i0,i1
+c           call get_face_m1centroid(xx,yy,zz,rr,iel,ifc)
+c           rr=sqrt((xx-xxc(ipin))**2+(yy-yyc(ipin))**2) !need radius to pin center, not origin
+            call facind(i0,i1,j0,j1,k0,k1,lx1,ly1,lz1,ifc)
+            do 020 k=k0,k1
+            do 020 j=j0,j1
+            do 020 i=i0,i1
+              xx=xm1(i,j,k,iel)-xxc(ipin)
+              yy=ym1(i,j,k,iel)-yyc(ipin)
+              rr=sqrt(xx*xx+yy*yy)
+              if (abs(rr-Rp).lt.ftol) then
                 pindx(i,j,k,iel) = ipin
                 if(dopin(ipin)) then
                   xpt=xm1(i,j,k,iel)-xxc(ipin)
@@ -192,8 +196,8 @@ c                   sptl = 2.- sptl
 c                 endif
 c                 spt(i,j,k,iel) = sptl/2.0
                 endif
- 020          continue
-            endif
+              endif
+ 020        continue
  011      continue
         endif
  010  continue
@@ -242,40 +246,42 @@ c     reset displacement arrays
       call rzero(dely,n)
       call rzero(delz,n)
 
-c     step 2: add the filet
-      do i=1,n
-        ipin=pindx(i,1,1,1)
-        if(dopin(ipin)) then
-          xpt=xm1(i,1,1,1)-xxc(ipin)
-          ypt=ym1(i,1,1,1)-yyc(ipin)
-          thw = thetawire(i,1,1,1)
-          sptl = spt(i,1,1,1) * Stot !load from array
-          if(sptl.gt.S5) then !on the bottom of the wire
-            thloc = (sptl-S5)/Rw+pi+theta2
-            xnew=D1+Rw*cos(thloc)
-            ynew=Rw*sin(thloc)
-          elseif(sptl.gt.S6) then !on the bottom fillet
-            thloc = (S5-sptl)/Rf+theta2
-            xnew=  D2*cos(theta3)+Rf*cos(thloc)
-            ynew= -D2*sin(theta3)+Rf*sin(thloc)
-          elseif(sptl.gt.S3) then !on the pin
-            thloc = (sptl-S3)/Rp+theta3
-            xnew= Rp*cos(thloc)
-            ynew= Rp*sin(thloc)
-          elseif(sptl.gt.S4) then !on the top fillet
-            thloc = (S3-sptl)/Rf+pi+theta3
-            xnew= D2*cos(theta3)+Rf*cos(thloc)
-            ynew= D2*sin(theta3)+Rf*sin(thloc)
-          else  !on the top of the wire
-            thloc =sptl/Rw
-            xnew= D1+Rw*cos(thloc)
-            ynew= Rw*sin(thloc)
+c     step 2: add the filet 
+      if(Rf/Rw.lt.100) then
+        do i=1,n
+          ipin=pindx(i,1,1,1)
+          if(dopin(ipin)) then
+            xpt=xm1(i,1,1,1)-xxc(ipin)
+            ypt=ym1(i,1,1,1)-yyc(ipin)
+            thw = thetawire(i,1,1,1)
+            sptl = spt(i,1,1,1) * Stot !load from array
+            if(sptl.gt.S5) then !on the bottom of the wire
+              thloc = (sptl-S5)/Rw+pi+theta2
+              xnew=D1+Rw*cos(thloc)
+              ynew=Rw*sin(thloc)
+            elseif(sptl.gt.S6) then !on the bottom fillet
+              thloc = (S5-sptl)/Rf+theta2
+              xnew=  D2*cos(theta3)+Rf*cos(thloc)
+              ynew= -D2*sin(theta3)+Rf*sin(thloc)
+            elseif(sptl.gt.S3) then !on the pin
+              thloc = (sptl-S3)/Rp+theta3
+              xnew= Rp*cos(thloc)
+              ynew= Rp*sin(thloc)
+            elseif(sptl.gt.S4) then !on the top fillet
+              thloc = (S3-sptl)/Rf+pi+theta3
+              xnew= D2*cos(theta3)+Rf*cos(thloc)
+              ynew= D2*sin(theta3)+Rf*sin(thloc)
+            else  !on the top of the wire
+              thloc =sptl/Rw
+              xnew= D1+Rw*cos(thloc)
+              ynew= Rw*sin(thloc)
+            endif
+            call rotate_point_2d(xnew,ynew,0.0,0.0,thw,xr,yr)
+            delx(i,1,1,1) = xr - xpt
+            dely(i,1,1,1) = yr - ypt
           endif
-          call rotate_point_2d(xnew,ynew,0.0,0.0,thw,xr,yr)
-          delx(i,1,1,1) = xr - xpt
-          dely(i,1,1,1) = yr - ypt
-        endif
-      enddo
+        enddo
+      endif
 
       call ww_mv_mesh(delx,dely,delz,niters,ifoutiters,'st2') !execute step 2
 
@@ -554,7 +560,7 @@ c         magic distribution - it really does a better job of preseving BLs
         if(ifout) call prepost(.true.,na3)
 
         call fix_geom
-        call mesh_metrics(.true.)
+        call mesh_check(.true.,2,1)
 
         djmin = vlmin(JACM1,n)
         djmax = vlmax(JACM1,n)
