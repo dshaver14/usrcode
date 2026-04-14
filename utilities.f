@@ -621,6 +621,58 @@ C-----------------------------------------------------------------------
 
       return
       end
+C-----------------------------------------------------------------------
+      real function q_vol_sierra(ix,iy,iz,ie,ifld,Q_tot)
+      implicit none
+      include 'SIZE'
+      include 'TOTAL'
+ 
+      integer ix,iy,iz,ie,ifld,n,e,dir
+
+      logical ifdid(ldimt),ifprintNu(ldimt)
+      common /printNu/ ifprintNu
+
+      real time0(ldimt),tcorr,Q_tot,vel_avg
+      real glsum,glsc2,glsc3
+
+      data time0 /ldimt*-1.0/
+
+      save time0,vel_avg
+
+      n=nx1*ny1*nz1*nelv
+
+      dir=nint(abs(param(54))) !make sure this is an int, for my own sanity
+
+      ifprintNu(ifld-1)=.false. !corresponding routine still needs to be fixed
+
+      e=lglel(ie) !do nothing in solid region
+      if(e.gt.nelgv) then
+        q_vol_periodic = 0.0
+        return
+      endif
+
+      if(time.ne.time0(ifld-1)) then
+        time0(ifld-1)=time
+        if(dir.eq.1) then
+          vel_avg=glsc2(vx,bm1,n)!/volvm1
+          tcorr = -1.0*glsc3(t(1,1,1,1,ifld-1),vx,bm1,n)
+        elseif(dir.eq.2) then
+          vel_avg=glsc2(vy,bm1,n)!/volvm1
+          tcorr = -1.0*glsc3(t(1,1,1,1,ifld-1),vy,bm1,n)
+        elseif(dir.eq.3) then
+          vel_avg=glsc2(vz,bm1,n)!/volvm1
+          tcorr = -1.0*glsc3(t(1,1,1,1,ifld-1),vz,bm1,n)
+        endif
+        tcorr=tcorr/(vel_avg)!*volvm1)
+        call cadd (t(1,1,1,1,ifld-1),tcorr,n)
+      endif
+
+      if(dir.eq.1) q_vol_periodic=-Q_dot*vx(ix,iy,iz,ie)/vel_avg
+      if(dir.eq.2) q_vol_periodic=-Q_dot*vy(ix,iy,iz,ie)/vel_avg
+      if(dir.eq.3) q_vol_periodic=-Q_dot*vz(ix,iy,iz,ie)/vel_avg
+
+      return
+      end
 c-----------------------------------------------------------------------
       subroutine print_Nusselt
       include 'SIZE'
