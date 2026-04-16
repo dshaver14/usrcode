@@ -648,7 +648,7 @@ C-----------------------------------------------------------------------
 
       e=lglel(ie) !do nothing in solid region
       if(e.gt.nelgv) then
-        q_vol_periodic = 0.0
+        q_vol_sierra = 0.0
         return
       endif
 
@@ -668,9 +668,9 @@ C-----------------------------------------------------------------------
         call cadd (t(1,1,1,1,ifld-1),tcorr,nt)
       endif
 
-      if(dir.eq.1) q_vol_periodic=-Q_tot*vx(ix,iy,iz,ie)/vel_int
-      if(dir.eq.2) q_vol_periodic=-Q_tot*vy(ix,iy,iz,ie)/vel_int
-      if(dir.eq.3) q_vol_periodic=-Q_tot*vz(ix,iy,iz,ie)/vel_int
+      if(dir.eq.1) q_vol_sierra=-Q_tot*vx(ix,iy,iz,ie)/vel_int
+      if(dir.eq.2) q_vol_sierra=-Q_tot*vy(ix,iy,iz,ie)/vel_int
+      if(dir.eq.3) q_vol_sierra=-Q_tot*vz(ix,iy,iz,ie)/vel_int
 
       return
       end
