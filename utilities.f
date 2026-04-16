@@ -102,7 +102,11 @@ C-----------------------------------------------------------------------
 
       real phi(1)
 
-      if(phi(1).ne.phi(1)) call exitt
+      icont=0
+      if(phi(1).ne.phi(1)) icont=1
+      icont=iglsum(icont,1)
+      if(icont.ne.0) call exitt
+
       return
       end
 C-----------------------------------------------------------------------
