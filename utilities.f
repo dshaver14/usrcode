@@ -1173,6 +1173,89 @@ c-----------------------------------------------------------------------
       return
       end
 c-----------------------------------------------------------------------
+      subroutine average_files_rs(navg,ifvel,ifprs)
+      implicit none
+      include 'SIZE'
+      include 'TOTAL'
+      include 'AVG'
+
+      character*8 ftail
+      character*4 inbase
+      integer navg,n,i,j,iprs
+      logical ifxyo_s,ifvel,ifprs
+
+      n=nx1*ny1*nz1*nelv
+
+      if(navg.eq.0.or.nsteps.gt.0) return
+
+      atime=0.0
+      iprs = 5
+      if(.not.ifvel) iprs=2
+
+      if(ifvel) then
+        call rzero(uavg,n)
+        call rzero(vavg,n)
+        call rzero(wavg,n)
+      endif
+      if(ifprs) call rzero(pavg,n)
+      do j=1,ldimt
+        call rzero(tavg(1,1,1,1,j),n)
+      enddo
+      write(inbase,'(a4)')'tavg'
+      do i=1,navg
+        if(i.lt.10) then
+          write(ftail,'(a7,i1)')'0.f0000',i
+        elseif(i.lt.100) then
+          write(ftail,'(a6,i2)')'0.f000',i
+        elseif(i.lt.1000) then
+          write(ftail,'(a5,i3)')'0.f00',i
+        endif
+        call blank(initc(1),132)
+        initc(1)=trim(inbase)//ftail
+
+        call restart(1)
+
+        atime=atime+time
+        if(ifvel) then !nekRS starts at scalar 1, which Nek5000 interprets as temperature
+          call add2s2(uavg,t(1,1,1,1,2),time,n)
+          call add2s2(vavg,t(1,1,1,1,3),time,n)
+          call add2s2(wavg,t(1,1,1,1,4),time,n)
+        endif
+        if(ifprs) call add2s2(pavg,t(1,1,1,1,iprs),time,n)
+        do j=1,ldimt-iprs
+          call add2s2(tavg(1,1,1,1,j),t(1,1,1,1,j+iprs),time,n)
+        enddo
+      enddo
+      time=atime
+      call cmult(uavg,1.0/atime,n)
+      call cmult(vavg,1.0/atime,n)
+      call cmult(wavg,1.0/atime,n)
+      call cmult(pavg,1.0/atime,n)
+      do j=1,ldimt-iprs
+        call cmult(tavg(1,1,1,1,j),1.0/atime,n)
+      enddo
+
+      call copy (vx,uavg,n)
+      call copy (vy,vavg,n)
+      call copy (vz,wavg,n)
+      call copy (pr,pavg,n)
+      do j=1,ldimt-iprs
+        call copy(t(1,1,1,1,j),tavg(1,1,1,1,j),n)
+      enddo
+
+      if(nio.eq.0) write(*,*) "  average data:"
+      call print_limits !print out the average data
+
+      ifxyo_s = ifxyo
+      ifxyo=.true.
+
+      call prepost (.true.,'AVG')
+
+      ifxyo = ifxyo_s
+
+      return
+      end
+c-----------------------------------------------------------------------
       subroutine get_face_m1centroid(xx,yy,zz,rr,ie,iface)
       implicit none
       include 'SIZE'
